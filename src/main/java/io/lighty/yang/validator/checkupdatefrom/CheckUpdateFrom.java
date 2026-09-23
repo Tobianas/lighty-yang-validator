@@ -60,6 +60,7 @@ import org.opendaylight.yangtools.yang.model.api.AugmentationSchemaNode;
 import org.opendaylight.yangtools.yang.model.api.DataNodeContainer;
 import org.opendaylight.yangtools.yang.model.api.DataSchemaNode;
 import org.opendaylight.yangtools.yang.model.api.EffectiveModelContext;
+import org.opendaylight.yangtools.yang.model.api.EffectiveStatementEquivalent;
 import org.opendaylight.yangtools.yang.model.api.ElementCountConstraintAware;
 import org.opendaylight.yangtools.yang.model.api.IdentitySchemaNode;
 import org.opendaylight.yangtools.yang.model.api.MandatoryAware;
@@ -71,11 +72,18 @@ import org.opendaylight.yangtools.yang.model.api.RpcDefinition;
 import org.opendaylight.yangtools.yang.model.api.Status;
 import org.opendaylight.yangtools.yang.model.api.TypeDefinition;
 import org.opendaylight.yangtools.yang.model.api.TypeDefinitionAware;
+import org.opendaylight.yangtools.yang.model.api.meta.DataSchemaCompat;
+import org.opendaylight.yangtools.yang.model.api.meta.EffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.meta.ElementCountMatcher;
+import org.opendaylight.yangtools.yang.model.api.stmt.CaseEffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.ChoiceEffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.DataTreeEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.ModuleEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.RevisionStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.SchemaNodeIdentifier;
 import org.opendaylight.yangtools.yang.model.api.stmt.SchemaNodeIdentifier.Absolute;
+import org.opendaylight.yangtools.yang.model.api.stmt.SchemaTreeAwareEffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.SchemaTreeEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.type.BitsTypeDefinition;
 import org.opendaylight.yangtools.yang.model.api.type.EnumTypeDefinition;
 import org.opendaylight.yangtools.yang.model.api.type.IdentityrefTypeDefinition;
@@ -145,8 +153,7 @@ public class CheckUpdateFrom {
         if (is7950) {
             checkIdentities();
         }
-        final Collection<? extends DataSchemaNode> childNodes = oldModule.getChildNodes();
-        findNodesRecursively(childNodes);
+        findNodesRecursively(dataChildren(oldModule.asEffectiveStatement()));
 
         checkNotifications();
         checkAugmentations();
@@ -256,7 +263,7 @@ public class CheckUpdateFrom {
                     checkReference(oldAug.getReference(), newAug.getReference());
                     checkStatus(oldAug.getStatus(), newAug.getStatus(), oldAug.getTargetPath(),
                             newAug.getTargetPath());
-                    findNodesRecursively(oldAug.getChildNodes());
+                    findNodesRecursively(dataChildren(oldAug.asEffectiveStatement()));
                     augFound = true;
                     break;
                 }
@@ -282,7 +289,7 @@ public class CheckUpdateFrom {
                     checkReference(oldNotification.getReference(), newNotification.getReference());
                     checkStatus(oldNotification.getStatus(), newNotification.getStatus(),
                             oldSchemaIS.toSchemaNodeIdentifier(), newSchemaIS.toSchemaNodeIdentifier());
-                    findNodesRecursively(oldNotification.getChildNodes());
+                    findNodesRecursively(dataChildren(oldNotification.asEffectiveStatement()));
                     notificationFound = true;
                     newSchemaIS.exit();
                     break;
@@ -322,13 +329,29 @@ public class CheckUpdateFrom {
                         ((TypeDefinitionAware) newNode).typeDefinition());
                 }
 
-                if (oldNode instanceof DataNodeContainer) {
-                    findNodesRecursively(((DataNodeContainer) oldNode).getChildNodes());
+                if (oldNode instanceof DataNodeContainer && oldNode instanceof EffectiveStatementEquivalent<?> equivalent) {
+                    findNodesRecursively(dataChildren(equivalent.asEffectiveStatement()));
                 }
                 newSchemaIS.exit();
             }
             oldSchemaIS.exit();
         }
+    }
+
+    // Only called on a former DataNodeContainer (see caller), so a nested choice among its children comes back
+    // as one entry here too, same as getChildNodes() - not expanded into its cases
+    private static Collection<DataSchemaNode> dataChildren(final EffectiveStatement<?, ?> statement) {
+        if (!(statement instanceof SchemaTreeAwareEffectiveStatement<?, ?> aware)) {
+            return List.of();
+        }
+        final List<DataSchemaNode> children = new ArrayList<>();
+        for (final SchemaTreeEffectiveStatement<?> child : aware.schemaTreeNodes()) {
+            if ((child instanceof DataTreeEffectiveStatement<?> || child instanceof ChoiceEffectiveStatement
+                    || child instanceof CaseEffectiveStatement) && child instanceof DataSchemaCompat<?, ?> dataCompat) {
+                children.add(dataCompat.toDataSchemaNode());
+            }
+        }
+        return children;
     }
 
     private void checkTypeAware(final TypeDefinition<? extends TypeDefinition<?>> oldType,
@@ -728,10 +751,8 @@ public class CheckUpdateFrom {
                         oldOptionalRevision.get().toString()));
             }
 
-            final Collection<? extends RevisionStatement> revisionsNew =
-                    Objects.requireNonNull(((ModuleEffectiveStatement) newModule).getDeclared()).revisionStatements();
-            final Collection<? extends RevisionStatement> revisionsOld =
-                    Objects.requireNonNull(((ModuleEffectiveStatement) oldModule).getDeclared()).revisionStatements();
+            final Collection<? extends RevisionStatement> revisionsNew = revisionStatements(newModule);
+            final Collection<? extends RevisionStatement> revisionsOld = revisionStatements(oldModule);
 
             final List<Revision> newDates = revisionsNew
                     .stream()
@@ -743,6 +764,16 @@ public class CheckUpdateFrom {
                 }
             }
         }
+    }
+
+    // Module was cast directly to ModuleEffectiveStatement here, without checking whether it is actually an
+    // EffectiveStatementEquivalent first - a fragile cast rather than a use of the documented bridge.
+    private static Collection<? extends RevisionStatement> revisionStatements(final Module module) {
+        if (module instanceof EffectiveStatementEquivalent<?> equivalent
+                && equivalent.asEffectiveStatement() instanceof ModuleEffectiveStatement moduleStatement) {
+            return Objects.requireNonNull(moduleStatement.declared()).revisionStatements();
+        }
+        return List.of();
     }
 
     private void checkName() {
