@@ -26,15 +26,10 @@ import org.opendaylight.yangtools.yang.common.QName;
 import org.opendaylight.yangtools.yang.common.QNameModule;
 import org.opendaylight.yangtools.yang.common.Revision;
 import org.opendaylight.yangtools.yang.model.api.AugmentationSchemaNode;
-import org.opendaylight.yangtools.yang.model.api.CaseSchemaNode;
-import org.opendaylight.yangtools.yang.model.api.ChoiceSchemaNode;
-import org.opendaylight.yangtools.yang.model.api.ContainerLike;
 import org.opendaylight.yangtools.yang.model.api.DataSchemaNode;
 import org.opendaylight.yangtools.yang.model.api.EffectiveModelContext;
+import org.opendaylight.yangtools.yang.model.api.EffectiveStatementEquivalent;
 import org.opendaylight.yangtools.yang.model.api.GroupingDefinition;
-import org.opendaylight.yangtools.yang.model.api.LeafListSchemaNode;
-import org.opendaylight.yangtools.yang.model.api.LeafSchemaNode;
-import org.opendaylight.yangtools.yang.model.api.ListSchemaNode;
 import org.opendaylight.yangtools.yang.model.api.MandatoryAware;
 import org.opendaylight.yangtools.yang.model.api.Module;
 import org.opendaylight.yangtools.yang.model.api.ModuleImport;
@@ -42,8 +37,16 @@ import org.opendaylight.yangtools.yang.model.api.TypeDefinition;
 import org.opendaylight.yangtools.yang.model.api.TypedDataSchemaNode;
 import org.opendaylight.yangtools.yang.model.api.meta.DeclaredStatement;
 import org.opendaylight.yangtools.yang.model.api.meta.EffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.CaseEffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.ChoiceEffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.ContainerEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.DescriptionStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.InputEffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.LeafEffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.LeafListEffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.ListEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.ModuleEffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.OutputEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.ReferenceStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.RevisionStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.SchemaNodeIdentifier.Absolute;
@@ -187,7 +190,7 @@ public class ModulePrinter {
         }
 
         final Set<SchemaTree> schemaTrees = groupingTrees.get(groupingDefinition);
-        if (tree.getSchemaNode() instanceof ChoiceSchemaNode) {
+        if (isChoice(tree.getSchemaNode())) {
             resolveChoiceSchemaNode(schemaTrees, tree);
         } else {
             boolean containsKey = false;
@@ -210,7 +213,10 @@ public class ModulePrinter {
 
     private static Optional<GroupingDefinition> findMatchInGroupingDefinitions(
             final List<GroupingDefinition> groupingDefinitions, final DataSchemaNode schemaNode) {
-        Optional<GroupingDefinition> match;
+        if (!(schemaNode instanceof EffectiveStatementEquivalent<?> schemaEquivalent)) {
+            return Optional.empty();
+        }
+        final EffectiveStatement<?, ?> effectiveSchemaNode = schemaEquivalent.asEffectiveStatement();
         for (final GroupingDefinition grouping : groupingDefinitions) {
             final Optional<DataSchemaNode> dataChildByName = grouping.findDataChildByName(schemaNode.getQName());
             if (dataChildByName.isEmpty()) {
@@ -218,17 +224,17 @@ public class ModulePrinter {
             }
             final DataSchemaNode dataSchemaNode = dataChildByName.get();
 
-            if (!(dataSchemaNode instanceof EffectiveStatement) && !(schemaNode instanceof EffectiveStatement)) {
+            if (!(dataSchemaNode instanceof EffectiveStatementEquivalent<?> dataEquivalent)) {
                 continue;
             }
             final Collection<? extends EffectiveStatement<?, ?>> effectiveStatements
-                    = ((EffectiveStatement<?, ?>) dataSchemaNode).effectiveSubstatements();
-            final EffectiveStatement<?, ?> effectiveSchemaNode = (EffectiveStatement<?, ?>) schemaNode;
+                    = dataEquivalent.asEffectiveStatement().effectiveSubstatements();
             if (effectiveSchemaNode.effectiveSubstatements().size() != effectiveStatements.size()) {
                 continue;
             }
 
-            match = getGroupingDefinitionMatch(effectiveSchemaNode, effectiveStatements, grouping);
+            final Optional<GroupingDefinition> match =
+                    getGroupingDefinitionMatch(effectiveSchemaNode, effectiveStatements, grouping);
             if (match.isPresent()) {
                 return match;
             }
@@ -236,10 +242,15 @@ public class ModulePrinter {
         return Optional.empty();
     }
 
+    private static boolean isChoice(final DataSchemaNode node) {
+        return node instanceof EffectiveStatementEquivalent<?> equivalent
+                && equivalent.asEffectiveStatement() instanceof ChoiceEffectiveStatement;
+    }
+
     private static void resolveChoiceSchemaNode(final Set<SchemaTree> schemaTrees, final SchemaTree tree) {
         boolean extendedTree = false;
         for (final SchemaTree st : schemaTrees) {
-            if (st.getSchemaNode() instanceof ChoiceSchemaNode && st.getQname().equals(tree.getQname())) {
+            if (isChoice(st.getSchemaNode()) && st.getQname().equals(tree.getQname())) {
                 extendedTree = true;
                 for (final SchemaTree entry : tree.getChildren()) {
                     if (!st.getChildren().contains(entry)) {
@@ -296,24 +307,30 @@ public class ModulePrinter {
     private void doPrintSchema(final boolean isPrintingAllowed, final SchemaTree tree, final String groupingName,
             final HashMap<GroupingDefinition, Set<SchemaTree>> groupingTrees, final DataSchemaNode schemaNode) {
         if (isPrintingAllowed) {
-            if (schemaNode instanceof ContainerLike) {
+            final EffectiveStatement<?, ?> statement = schemaNode instanceof EffectiveStatementEquivalent<?> equivalent
+                    ? equivalent.asEffectiveStatement() : null;
+            if (statement instanceof ContainerEffectiveStatement || statement instanceof InputEffectiveStatement
+                    || statement instanceof OutputEffectiveStatement) {
                 printer.openStatement(Statement.CONTAINER, schemaNode.getQName().getLocalName());
                 printer.printConfig(schemaNode.effectiveConfig().orElse(Boolean.TRUE));
-            } else if (schemaNode instanceof ListSchemaNode listSchemaNode) {
+            } else if (statement instanceof ListEffectiveStatement listStatement) {
                 printer.openStatement(Statement.LIST, schemaNode.getQName().getLocalName());
                 final StringJoiner keyJoiner = new StringJoiner(" ", "key \"", "\"");
-                listSchemaNode.getKeyDefinition().stream()
+                // KeyEffectiveStatement is a direct, non-inherited property of the list statement itself, unlike
+                // Status/Config - verified empirically against ListSchemaNode.getKeyDefinition() for both keyed
+                // and keyless lists.
+                listStatement.findKeyStatement().map(key -> key.argument().asList()).orElse(List.of()).stream()
                         .map(QName::getLocalName)
                         .forEach(keyJoiner::add);
                 printer.printSimple("", keyJoiner.toString());
-            } else if (schemaNode instanceof LeafSchemaNode leafSchemaNode) {
+            } else if (statement instanceof LeafEffectiveStatement) {
                 printer.openStatement(Statement.LEAF, schemaNode.getQName().getLocalName());
-                typePrinter.printType(printer, leafSchemaNode);
-            } else if (schemaNode instanceof ChoiceSchemaNode) {
+                typePrinter.printType(printer, (TypedDataSchemaNode) schemaNode);
+            } else if (statement instanceof ChoiceEffectiveStatement) {
                 printer.openStatement(Statement.CHOICE, schemaNode.getQName().getLocalName());
-            } else if (schemaNode instanceof CaseSchemaNode) {
+            } else if (statement instanceof CaseEffectiveStatement) {
                 printer.openStatement(Statement.CASE, schemaNode.getQName().getLocalName());
-            } else if (schemaNode instanceof LeafListSchemaNode) {
+            } else if (statement instanceof LeafListEffectiveStatement) {
                 printer.openStatement(Statement.LEAF_LIST, schemaNode.getQName().getLocalName());
                 typePrinter.printType(printer, (TypedDataSchemaNode) schemaNode);
             } else {
@@ -400,9 +417,10 @@ public class ModulePrinter {
             return;
         }
 
-        if (module instanceof ModuleEffectiveStatement) {
-            final Collection<? extends RevisionStatement> revisions = Objects
-                    .requireNonNull(((ModuleEffectiveStatement) module).getDeclared()).revisionStatements();
+        if (module instanceof EffectiveStatementEquivalent<?> equivalent
+                && equivalent.asEffectiveStatement() instanceof ModuleEffectiveStatement moduleStatement) {
+            final Collection<? extends RevisionStatement> revisions =
+                    Objects.requireNonNull(moduleStatement.declared()).revisionStatements();
             printEachRevision(revisions);
         } else {
             doPrintSimpleRevision(revision.get());
