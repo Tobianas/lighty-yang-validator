@@ -78,7 +78,7 @@ abstract class Line {
 
     // Verified against yang-model-api 15.1.3 that DataSchemaNode.getStatus() does not resolve inheritance either
     // (see JsonTree's status() for the same finding) - no old-model bridge needed.
-    private static Status status(final EffectiveStatement<?, ?> statement) {
+    static Status status(final EffectiveStatement<?, ?> statement) {
         return statement.findFirstEffectiveSubstatement(StatusEffectiveStatement.class)
                 .map(StatusEffectiveStatement::argument)
                 .orElse(Status.CURRENT);
