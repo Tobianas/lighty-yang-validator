@@ -56,7 +56,6 @@ import java.util.stream.Collectors;
 import net.sourceforge.argparse4j.impl.choice.CollectionArgumentChoice;
 import org.opendaylight.yangtools.yang.common.QName;
 import org.opendaylight.yangtools.yang.common.Revision;
-import org.opendaylight.yangtools.yang.model.api.DataNodeContainer;
 import org.opendaylight.yangtools.yang.model.api.DataSchemaNode;
 import org.opendaylight.yangtools.yang.model.api.EffectiveModelContext;
 import org.opendaylight.yangtools.yang.model.api.EffectiveStatementEquivalent;
@@ -345,7 +344,7 @@ public class CheckUpdateFrom {
                         ((TypeDefinitionAware) newNode).typeDefinition());
                 }
 
-                if (oldNode instanceof DataNodeContainer && oldNode instanceof EffectiveStatementEquivalent<?> equivalent) {
+                if (oldNode instanceof EffectiveStatementEquivalent<?> equivalent) {
                     findNodesRecursively(dataChildren(equivalent.asEffectiveStatement()));
                 }
                 newSchemaIS.exit();
@@ -354,8 +353,8 @@ public class CheckUpdateFrom {
         }
     }
 
-    // Only called on a former DataNodeContainer (see caller), so a nested choice among its children comes back
-    // as one entry here too, same as getChildNodes() - not expanded into its cases
+    // Only called on nodes with schema-tree children (see caller), so a nested choice among its children comes
+    // back as one entry here too, same as getChildNodes() - not expanded into its cases
     private static Collection<DataSchemaNode> dataChildren(final EffectiveStatement<?, ?> statement) {
         if (!(statement instanceof SchemaTreeAwareEffectiveStatement<?, ?> aware)) {
             return List.of();
@@ -490,13 +489,13 @@ public class CheckUpdateFrom {
         // full schema tree (rather than findDataTreeChild) means choice/case segments in the path do not need any
         // special handling.
         final boolean oldIsConfig = oldContext.findSchemaTreeNode(oldSchemaIS.toSchemaNodeIdentifier())
-                .filter(DataSchemaNode.class::isInstance)
-                .map(DataSchemaNode.class::cast)
+                .filter(DataSchemaCompat.class::isInstance)
+                .map(statement -> ((DataSchemaCompat<?, ?>) statement).toDataSchemaNode())
                 .flatMap(DataSchemaNode::effectiveConfig)
                 .orElse(Boolean.TRUE);
         final boolean newIsConfig = newContext.findSchemaTreeNode(newSchemaIS.toSchemaNodeIdentifier())
-                .filter(DataSchemaNode.class::isInstance)
-                .map(DataSchemaNode.class::cast)
+                .filter(DataSchemaCompat.class::isInstance)
+                .map(statement -> ((DataSchemaCompat<?, ?>) statement).toDataSchemaNode())
                 .flatMap(DataSchemaNode::effectiveConfig)
                 .orElse(Boolean.TRUE);
         if (!oldIsConfig && newIsConfig
