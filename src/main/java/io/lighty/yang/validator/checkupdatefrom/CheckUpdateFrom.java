@@ -56,7 +56,6 @@ import java.util.stream.Collectors;
 import net.sourceforge.argparse4j.impl.choice.CollectionArgumentChoice;
 import org.opendaylight.yangtools.yang.common.QName;
 import org.opendaylight.yangtools.yang.common.Revision;
-import org.opendaylight.yangtools.yang.model.api.AugmentationSchemaNode;
 import org.opendaylight.yangtools.yang.model.api.DataNodeContainer;
 import org.opendaylight.yangtools.yang.model.api.DataSchemaNode;
 import org.opendaylight.yangtools.yang.model.api.EffectiveModelContext;
@@ -75,15 +74,18 @@ import org.opendaylight.yangtools.yang.model.api.TypeDefinitionAware;
 import org.opendaylight.yangtools.yang.model.api.meta.DataSchemaCompat;
 import org.opendaylight.yangtools.yang.model.api.meta.EffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.meta.ElementCountMatcher;
+import org.opendaylight.yangtools.yang.model.api.stmt.AugmentEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.CaseEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.ChoiceEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.DataTreeEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.ModuleEffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.ReferenceEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.RevisionStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.SchemaNodeIdentifier;
 import org.opendaylight.yangtools.yang.model.api.stmt.SchemaNodeIdentifier.Absolute;
 import org.opendaylight.yangtools.yang.model.api.stmt.SchemaTreeAwareEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.stmt.SchemaTreeEffectiveStatement;
+import org.opendaylight.yangtools.yang.model.api.stmt.StatusEffectiveStatement;
 import org.opendaylight.yangtools.yang.model.api.type.BitsTypeDefinition;
 import org.opendaylight.yangtools.yang.model.api.type.EnumTypeDefinition;
 import org.opendaylight.yangtools.yang.model.api.type.IdentityrefTypeDefinition;
@@ -254,25 +256,39 @@ public class CheckUpdateFrom {
     }
 
     private void checkAugmentations() {
-        final Collection<? extends AugmentationSchemaNode> oldAugmentations = oldModule.getAugmentations();
-        final Collection<? extends AugmentationSchemaNode> newAugmentations = newModule.getAugmentations();
-        for (final AugmentationSchemaNode oldAug : oldAugmentations) {
+        final Collection<AugmentEffectiveStatement> oldAugmentations = oldModule.asEffectiveStatement()
+                .collectEffectiveSubstatements(AugmentEffectiveStatement.class);
+        final Collection<AugmentEffectiveStatement> newAugmentations = newModule.asEffectiveStatement()
+                .collectEffectiveSubstatements(AugmentEffectiveStatement.class);
+        for (final AugmentEffectiveStatement oldAug : oldAugmentations) {
             boolean augFound = false;
-            for (final AugmentationSchemaNode newAug : newAugmentations) {
-                if (oldAug.getTargetPath().equals(newAug.getTargetPath())) {
-                    checkReference(oldAug.getReference(), newAug.getReference());
-                    checkStatus(oldAug.getStatus(), newAug.getStatus(), oldAug.getTargetPath(),
-                            newAug.getTargetPath());
-                    findNodesRecursively(dataChildren(oldAug.asEffectiveStatement()));
+            for (final AugmentEffectiveStatement newAug : newAugmentations) {
+                if (oldAug.argument().equals(newAug.argument())) {
+                    checkReference(reference(oldAug), reference(newAug));
+                    checkStatus(status(oldAug), status(newAug), oldAug.argument(), newAug.argument());
+                    findNodesRecursively(dataChildren(oldAug));
                     augFound = true;
                     break;
                 }
             }
             if (!augFound) {
                 errors.add(missingNodeError().updateInformation("missing augmentation node",
-                        oldAug.getTargetPath().toString()));
+                        oldAug.argument().toString()));
             }
         }
+    }
+
+    // Verified against yang-model-api 15.1.3 that DataSchemaNode.getStatus() does not resolve inheritance either
+    // (see Line's status() for the same finding) - no old-model bridge needed. AugmentEffectiveStatement does not
+    // itself extend StatusEffectiveStatement.OptionalIn, so this goes through the generic substatement search.
+    private static Status status(final EffectiveStatement<?, ?> statement) {
+        return statement.findFirstEffectiveSubstatement(StatusEffectiveStatement.class)
+                .map(StatusEffectiveStatement::argument)
+                .orElse(Status.CURRENT);
+    }
+
+    private static Optional<String> reference(final AugmentEffectiveStatement augment) {
+        return augment.findReferenceStatement().map(ReferenceEffectiveStatement::argument);
     }
 
     private void checkNotifications() {
